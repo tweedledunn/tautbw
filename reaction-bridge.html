@@ -6,33 +6,31 @@
 <meta name="robots" content="noindex, nofollow">
 </head>
 <body>
-<!--
-  This page exists for one reason: Neocities applies a Content-Security-
-  Policy to newer accounts that blocks fetch() to any domain but itself
-  (connect-src 'self'). Hosted off Neocities (e.g. GitHub Pages, which sets
-  no such policy), this page is embedded as a hidden iframe on the real
-  site. An iframe from a different origin runs under ITS OWN page's CSP,
-  not the parent page's — so the actual Supabase calls happen here, and the
-  main site just postMessages a request over and waits for a reply.
-
-  Only postMessages from ALLOWED_ORIGIN are answered — this page is public
-  and reachable by anyone, so that check is what stops a stranger's page
-  from using it to write to (or read from) the reactions table.
--->
 <script>
   const SUPABASE_URL = "https://gxkvmhaghxdmkrlimtee.supabase.co";
   const SUPABASE_KEY = "sb_publishable_SHOuNlE6JXzNfCqMy6Dkrg_yx_s0Tvk";
   const ALLOWED_ORIGIN = "https://thisallusedtobewoods.neocities.org";
 
+  console.log("[bridge] script loaded, waiting for messages. allowed origin:", ALLOWED_ORIGIN);
+
   window.addEventListener("message", async (event) => {
-    if (event.origin !== ALLOWED_ORIGIN) return;
+    console.log("[bridge] message event from", event.origin, event.data);
+    if (event.origin !== ALLOWED_ORIGIN) {
+      console.log("[bridge] ignoring — origin mismatch. expected:", ALLOWED_ORIGIN, "got:", event.origin);
+      return;
+    }
     const msg = event.data || {};
     const { requestId, action } = msg;
-    if (!requestId || !action) return;
+    if (!requestId || !action) {
+      console.log("[bridge] ignoring — missing requestId or action", msg);
+      return;
+    }
 
     let result = { ok: false };
     try {
       if (action === "hit") {
+        const key = `${msg.kind}-${msg.id}`;
+        console.log("[bridge] hit — calling increment_reaction with key:", key);
         const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/increment_reaction`, {
           method: "POST",
           headers: {
@@ -40,4 +38,27 @@
             Authorization: `Bearer ${SUPABASE_KEY}`,
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ reaction_key:
+          body: JSON.stringify({ reaction_key: key })
+        });
+        const bodyText = await res.text();
+        console.log("[bridge] increment_reaction response:", res.status, bodyText);
+        result = { ok: res.ok };
+      } else if (action === "getAll") {
+        console.log("[bridge] getAll — fetching reactions table");
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/reactions?select=key,count`, {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+        });
+        result = { ok: res.ok, data: res.ok ? await res.json() : [] };
+        console.log("[bridge] getAll response:", res.status, result);
+      }
+    } catch (e) {
+      console.error("[bridge] caught error:", e);
+      result = { ok: false, error: String(e) };
+    }
+
+    console.log("[bridge] posting result back to parent:", result);
+    event.source.postMessage({ requestId, result }, event.origin);
+  });
+</script>
+</body>
+</html>
